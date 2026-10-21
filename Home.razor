@@ -1,0 +1,123 @@
+@page "/"
+@using System.Net
+@using System.Net.Http.Json
+@using System.Text.Json
+@using BlazorWasmBrasilApiCep.Models
+@inject HttpClient Http
+
+<PageTitle>Consulta CEP - BrasilAPI</PageTitle>
+
+<h1>Consulta de CEP com Blazor WebAssembly</h1>
+
+@* <form> + @onsubmit permite consultar também com a tecla Enter. *@
+<form @onsubmit="ConsultarCep">
+    <div class="row mb-3">
+        <div class="col-md-4">
+            <label for="cepInput" class="form-label">Digite o CEP:</label>
+            <input id="cepInput" class="form-control" @bind="cepDigitado"
+                   placeholder="Ex: 01001000" maxlength="9" inputmode="numeric" />
+        </div>
+        <div class="col-md-2 d-flex align-items-end">
+            <button type="submit" class="btn btn-primary w-100" disabled="@carregando">
+                @(carregando ? "Buscando..." : "Consultar")
+            </button>
+        </div>
+    </div>
+</form>
+
+@if (!string.IsNullOrEmpty(mensagemErro))
+{
+    <div class="alert alert-danger">@mensagemErro</div>
+}
+
+@if (endereco != null)
+{
+    <div class="card">
+        <div class="card-body">
+            <h4 class="card-title text-success">Endereço Encontrado</h4>
+            <p><strong>CEP:</strong> @endereco.cep</p>
+            <p><strong>Logradouro:</strong> @endereco.street</p>
+            <p><strong>Bairro:</strong> @endereco.neighborhood</p>
+            <p><strong>Cidade:</strong> @endereco.city (@endereco.state)</p>
+            <p><strong>Serviço:</strong> @endereco.service</p>
+
+            @if (endereco.ibge != null)
+            {
+                <hr />
+                <h5 class="text-secondary">Dados do IBGE</h5>
+                <p><strong>Cidade IBGE:</strong> @endereco.ibge.city</p>
+                <p class="mb-0"><strong>Estado IBGE:</strong> @endereco.ibge.state</p>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    private const string UrlBrasilApi = "https://brasilapi.com.br/api/cep/v1/";
+
+    private string? cepDigitado;
+    private Cep? endereco;
+    private string? mensagemErro;
+    private bool carregando;
+
+    private async Task ConsultarCep()
+    {
+        mensagemErro = string.Empty;
+        endereco = null;
+
+        if (string.IsNullOrWhiteSpace(cepDigitado))
+        {
+            mensagemErro = "Por favor, digite um CEP.";
+            return;
+        }
+
+        // Mantém só os dígitos: aceita "01001-000" e impede que texto arbitrário vá para a URL.
+        var cepLimpo = new string(cepDigitado.Where(char.IsAsciiDigit).ToArray());
+
+        if (cepLimpo.Length != 8)
+        {
+            mensagemErro = "O CEP deve conter 8 dígitos.";
+            return;
+        }
+
+        carregando = true;
+
+        try
+        {
+            using var resposta = await Http.GetAsync(UrlBrasilApi + cepLimpo);
+
+            // A BrasilAPI responde 404 quando nenhum provedor encontra o CEP
+            // e 400 quando o formato é inválido; os dois são "não encontrado" para o usuário.
+            if (resposta.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.BadRequest)
+            {
+                mensagemErro = "CEP não encontrado.";
+                return;
+            }
+
+            resposta.EnsureSuccessStatusCode();
+            endereco = await resposta.Content.ReadFromJsonAsync<Cep>();
+
+            if (endereco?.cep == null)
+            {
+                mensagemErro = "A API não retornou dados para esse CEP.";
+                endereco = null;
+            }
+        }
+        catch (HttpRequestException ex)
+        {
+            mensagemErro = $"Erro ao conectar à BrasilAPI: {ex.Message}";
+        }
+        catch (JsonException)
+        {
+            mensagemErro = "A BrasilAPI retornou uma resposta em formato inesperado.";
+        }
+        catch (TaskCanceledException)
+        {
+            mensagemErro = "A BrasilAPI demorou demais para responder. Tente novamente.";
+        }
+        finally
+        {
+            carregando = false;
+        }
+    }
+}
